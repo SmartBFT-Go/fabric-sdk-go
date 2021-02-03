@@ -40,10 +40,15 @@ type TxResponseWithErrMsg struct {
 }
 
 func orderersResponsesChecker() func(resp *TxResponseWithErrMsg, orderersNumber int) bool {
-	var numberOfCalls int
+	var (
+		numberOfCalls int
+		isFail        bool
+	)
+
 	return func(resp *TxResponseWithErrMsg, orderersNumber int) bool {
+		isFail = resp.Error != nil && numberOfCalls == orderersNumber
 		numberOfCalls += 1
-		return resp.Error != nil && numberOfCalls == orderersNumber
+		return isFail
 	}
 }
 
@@ -211,7 +216,7 @@ func broadcastEnvelope(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, 
 	// if no errors in first response, return successful response
 	// if error returned, wait for the next response
 	isAllOrderersFail := orderersResponsesChecker()
-	for i := 1; i <= orderersN; i++ {
+	for i := 0; i < orderersN; i++ {
 		resp := <-broadcastResponses
 		if isAllOrderersFail(&resp, orderersN) || successfulOrdererResponse(&resp) {
 			return resp.TxResponse, resp.Error
