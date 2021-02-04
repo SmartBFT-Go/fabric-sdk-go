@@ -34,6 +34,28 @@ const (
 	Upgrade
 )
 
+type TxResponseWithErrMsg struct {
+	TxResponse *fab.TransactionResponse
+	Error      error
+}
+
+func orderersResponsesChecker() func(resp *TxResponseWithErrMsg, orderersNumber int) bool {
+	var (
+		numberOfCalls int
+		isFail        bool
+	)
+
+	return func(resp *TxResponseWithErrMsg, orderersNumber int) bool {
+		isFail = resp.Error != nil && numberOfCalls == orderersNumber
+		numberOfCalls += 1
+		return isFail
+	}
+}
+
+func successfulOrdererResponse(resp *TxResponseWithErrMsg) bool {
+	return resp.Error == nil
+}
+
 // New create a transaction with proposal response, following the endorsement policy.
 func New(request fab.TransactionRequest) (*fab.Transaction, error) {
 	if len(request.ProposalResponses) == 0 {
@@ -155,17 +177,12 @@ func BroadcastPayload(reqCtx reqContext.Context, payload *common.Payload, ordere
 	return broadcastEnvelope(reqCtx, envelope, orderers)
 }
 
-// broadcastEnvelope will send the given envelope to some orderer, picking random endpoints
-// until all are exhausted
+// broadcastEnvelope will send the given envelope to the all orderers
 func broadcastEnvelope(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, orderers []fab.Orderer) (*fab.TransactionResponse, error) {
 	// Check if orderers are defined
 	if len(orderers) == 0 {
 		return nil, errors.New("orderers not set")
 	}
-
-	// Copy aside the ordering service endpoints
-	randOrderers := []fab.Orderer{}
-	randOrderers = append(randOrderers, orderers...)
 
 	// get a context client instance to create child contexts with timeout read from the config in sendBroadcast()
 	ctxClient, ok := context.RequestClientContext(reqCtx)
@@ -173,17 +190,32 @@ func broadcastEnvelope(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, 
 		return nil, errors.New("failed get client context from reqContext for SendTransaction")
 	}
 
-	// Iterate them in a random order and try broadcasting 1 by 1
-	var errResp error
-	for _, i := range rand.Perm(len(randOrderers)) {
-		resp, err := sendBroadcast(reqCtx, envelope, randOrderers[i], ctxClient)
-		if err != nil {
-			errResp = err
-		} else {
-			return resp, nil
+	orderersN := len(orderers)
+
+	broadcastResponses := make(chan TxResponseWithErrMsg, orderersN)
+
+	// broadcast to the all orderers
+	for _, orderer := range orderers {
+		go func(orderer fab.Orderer) {
+			resp, err := sendBroadcast(reqCtx, envelope, orderer, ctxClient)
+			broadcastResponses <- TxResponseWithErrMsg{
+				TxResponse: resp,
+				Error:      err,
+			}
+		}(orderer)
+	}
+
+	// read responses
+	// if no errors in the first response, return successful response
+	// if error returned, wait for the next response
+	isAllOrderersFail := orderersResponsesChecker()
+	for i := 0; i < orderersN; i++ {
+		resp := <-broadcastResponses
+		if isAllOrderersFail(&resp, orderersN) || successfulOrdererResponse(&resp) {
+			return resp.TxResponse, resp.Error
 		}
 	}
-	return nil, errResp
+	return nil, nil
 }
 
 func sendBroadcast(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, orderer fab.Orderer, client ctxprovider.Client) (*fab.TransactionResponse, error) {
