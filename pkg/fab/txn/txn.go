@@ -202,13 +202,13 @@ func broadcastEnvelope(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, 
 
 	// broadcast to the all orderers
 	for _, orderer := range orderers {
-		go func() {
+		go func(orderer fab.Orderer) {
 			resp, err := sendBroadcast(reqCtx, envelope, orderer, ctxClient)
 			broadcastResponses <- TxResponseWithErrMsg{
 				TxResponse: resp,
 				Error:      err,
 			}
-		}()
+		}(orderer)
 	}
 
 	// read responses
