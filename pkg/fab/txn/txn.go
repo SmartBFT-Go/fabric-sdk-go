@@ -183,8 +183,7 @@ func BroadcastPayload(reqCtx reqContext.Context, payload *common.Payload, ordere
 	return broadcastEnvelope(reqCtx, envelope, orderers)
 }
 
-// broadcastEnvelope will send the given envelope to all orderers
-// until all are exhausted
+// broadcastEnvelope will send the given envelope to the all orderers
 func broadcastEnvelope(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, orderers []fab.Orderer) (*fab.TransactionResponse, error) {
 	// Check if orderers are defined
 	if len(orderers) == 0 {
@@ -201,7 +200,7 @@ func broadcastEnvelope(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, 
 
 	broadcastResponses := make(chan TxResponseWithErrMsg, orderersN)
 
-	// broadcast to all orderers
+	// broadcast to the all orderers
 	for _, orderer := range orderers {
 		go func() {
 			resp, err := sendBroadcast(reqCtx, envelope, orderer, ctxClient)
@@ -213,7 +212,7 @@ func broadcastEnvelope(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, 
 	}
 
 	// read responses
-	// if no errors in first response, return successful response
+	// if no errors in the first response, return successful response
 	// if error returned, wait for the next response
 	isAllOrderersFail := orderersResponsesChecker()
 	for i := 0; i < orderersN; i++ {
