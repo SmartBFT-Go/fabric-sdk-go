@@ -197,7 +197,9 @@ func broadcastEnvelope(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, 
 		return nil, errors.New("failed get client context from reqContext for SendTransaction")
 	}
 
-	broadcastResponses := make(chan TxResponseWithErrMsg, len(orderers))
+	orderersN := len(orderers)
+
+	broadcastResponses := make(chan TxResponseWithErrMsg, orderersN)
 
 	// broadcast to all orderers
 	for _, orderer := range orderers {
@@ -209,8 +211,6 @@ func broadcastEnvelope(reqCtx reqContext.Context, envelope *fab.SignedEnvelope, 
 			}
 		}()
 	}
-
-	orderersN := len(orderers)
 
 	// read responses
 	// if no errors in first response, return successful response
