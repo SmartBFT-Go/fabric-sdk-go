@@ -28,6 +28,7 @@ TEST_LOCAL="${TEST_LOCAL:-false}"
 TEST_CHANGED_ONLY="${TEST_CHANGED_ONLY:-false}"
 TEST_RACE_CONDITIONS="${TEST_RACE_CONDITIONS:-true}"
 SCRIPT_DIR="$(dirname "$0")"
+CC_MODE="${CC_MODE:-lifecycle}"
 # TODO: better default handling for FABRIC_CRYPTOCONFIG_VERSION
 
 GOMOD_PATH=$(cd ${SCRIPT_DIR} && ${GO_CMD} env GOMOD)
@@ -51,15 +52,14 @@ cd "${MODULE_PATH}"
 PKGS=($(${GO_CMD} list ${PROJECT_MODULE}/test/integration/... 2> /dev/null | \
       grep ^${PROJECT_MODULE}/test/integration/e2e/pkcs11 | \
       tr '\n' ' '))
-cd ${PWD_ORIG}
 
 # Reduce tests to changed packages.
 if [ "${TEST_CHANGED_ONLY}" = true ]; then
-    # findChangedFiles assumes that the working directory contains the repo; so change to the repo directory.
-    PWD_ORIG=$(pwd)
+    # Find changed files across the project as these may be dependencies of the module.
+    PWD_ORIG_FIND=$(pwd)
     cd "${PROJECT_DIR}"
     findChangedFiles
-    cd ${PWD_ORIG}
+    cd "${PWD_ORIG_FIND}"
 
     if [[ "${CHANGED_FILES[@]}" =~ ( |^)(test/fixtures/|test/metadata/|test/scripts/|Makefile( |$)|go.mod( |$)|ci.properties( |$)) ]]; then
         echo "Test scripts, fixtures or metadata changed - running all tests"
@@ -110,8 +110,7 @@ GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.ProjectPath=${PROJE
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.ChannelConfigPath=test/fixtures/fabric/${FABRIC_FIXTURE_VERSION}/channel"
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.CryptoConfigPath=test/fixtures/fabric/${FABRIC_CRYPTOCONFIG_VERSION}/crypto-config"
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.TestRunID=${FABRIC_SDKGO_TESTRUN_ID}"
+GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.CCMode=${CC_MODE}"
 
-PWD_ORIG=$(pwd)
-cd "${MODULE_PATH}"
 $GO_CMD test ${RACEFLAG} -tags "${GO_TAGS}" ${GO_TESTFLAGS} -ldflags="${GO_LDFLAGS}" ${PKGS[@]} -p 1 -timeout=40m configFile=${CONFIG_FILE} testLocal=${TEST_LOCAL}
 cd ${PWD_ORIG}

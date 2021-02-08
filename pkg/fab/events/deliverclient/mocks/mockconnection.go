@@ -7,11 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 package mocks
 
 import (
+	"time"
+
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	ab "github.com/hyperledger/fabric-protos-go/orderer"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 	clientmocks "github.com/hyperledger/fabric-sdk-go/pkg/fab/events/client/mocks"
 	"github.com/hyperledger/fabric-sdk-go/pkg/fab/events/deliverclient/connection"
-	cb "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/common"
-	ab "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/orderer"
-	pb "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
 )
 
@@ -34,13 +36,23 @@ var ConnFactory = func(opts ...clientmocks.Opt) clientmocks.Connection {
 // MockConnection is a fake connection used for unit testing
 type MockConnection struct {
 	clientmocks.MockConnection
+	responseDelay time.Duration
 }
 
 // NewConnection returns a new MockConnection using the given options
 func NewConnection(opts ...clientmocks.Opt) *MockConnection {
-	return &MockConnection{
+	c := &MockConnection{
 		MockConnection: *clientmocks.NewMockConnection(opts...),
 	}
+
+	copts := &clientmocks.Opts{}
+	for _, opt := range opts {
+		opt(copts)
+	}
+
+	c.responseDelay = copts.ResponseDelay
+
+	return c
 }
 
 // Receive implements the MockConnection interface
@@ -63,6 +75,10 @@ func (c *MockConnection) Receive(eventch chan<- interface{}) {
 func (c *MockConnection) Send(sinfo *ab.SeekInfo) error {
 	if c.Closed() {
 		return errors.New("mock connection is closed")
+	}
+
+	if c.responseDelay > 0 {
+		time.Sleep(c.responseDelay)
 	}
 
 	switch seek := sinfo.Start.Type.(type) {

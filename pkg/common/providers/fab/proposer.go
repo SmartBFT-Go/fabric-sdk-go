@@ -9,7 +9,7 @@ package fab
 import (
 	reqContext "context"
 
-	pb "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/peer"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 )
 
 // ProposalProcessor simulates transaction proposal, so that a client can submit the result for ordering.
@@ -64,11 +64,14 @@ type TransactionHeader interface {
 }
 
 // ChaincodeInvokeRequest contains the parameters for sending a transaction proposal.
+// nolint: maligned
 type ChaincodeInvokeRequest struct {
 	ChaincodeID  string
+	Lang         pb.ChaincodeSpec_Type
 	TransientMap map[string][]byte
 	Fcn          string
 	Args         [][]byte
+	IsInit       bool
 }
 
 // TransactionProposal contains a marashalled transaction proposal.

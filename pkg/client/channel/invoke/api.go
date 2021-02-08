@@ -11,11 +11,11 @@ import (
 	reqContext "context"
 	"time"
 
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 	selectopts "github.com/hyperledger/fabric-sdk-go/pkg/client/common/selection/options"
 	"github.com/hyperledger/fabric-sdk-go/pkg/common/errors/retry"
 	"github.com/hyperledger/fabric-sdk-go/pkg/common/providers/core"
 	"github.com/hyperledger/fabric-sdk-go/pkg/common/providers/fab"
-	pb "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/peer"
 )
 
 // CCFilter returns true if the given chaincode should be included
@@ -50,6 +50,7 @@ type Request struct {
 	// The invoked chaincode (specified by ChaincodeID) may optionally be added to the invocation
 	// chain along with any collections, otherwise it may be omitted.
 	InvocationChain []*fab.ChaincodeCall
+	IsInit          bool
 }
 
 //Response contains response parameters for query and execute transaction

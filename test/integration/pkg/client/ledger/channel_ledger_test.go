@@ -17,6 +17,7 @@ import (
 	"github.com/hyperledger/fabric-sdk-go/pkg/common/providers/fab"
 	"github.com/hyperledger/fabric-sdk-go/pkg/common/providers/msp"
 	"github.com/hyperledger/fabric-sdk-go/test/integration"
+	"github.com/hyperledger/fabric-sdk-go/test/metadata"
 
 	"github.com/hyperledger/fabric-sdk-go/pkg/client/channel"
 	"github.com/hyperledger/fabric-sdk-go/pkg/client/ledger"
@@ -28,9 +29,9 @@ import (
 )
 
 const (
-	channelConfigFile = "mychannel.tx"
-	channelID         = "mychannel"
-	orgName           = org1Name
+	channelConfigTxFile = "mychannel.tx"
+	channelID           = "mychannel"
+	orgName             = org1Name
 )
 
 func initializeLedgerTests(t *testing.T) (*fabsdk.FabricSDK, []string) {
@@ -58,7 +59,7 @@ func initializeLedgerTests(t *testing.T) (*fabsdk.FabricSDK, []string) {
 		t.Fatalf("creating peers failed: %s", err)
 	}
 
-	req := resmgmt.SaveChannelRequest{ChannelID: channelID, ChannelConfigPath: integration.GetChannelConfigPath(channelConfigFile), SigningIdentities: []msp.SigningIdentity{adminIdentity}}
+	req := resmgmt.SaveChannelRequest{ChannelID: channelID, ChannelConfigPath: integration.GetChannelConfigTxPath(channelConfigTxFile), SigningIdentities: []msp.SigningIdentity{adminIdentity}}
 	err = integration.InitializeChannel(sdk, orgName, req, targets)
 	if err != nil {
 		t.Fatalf("failed to ensure channel has been initialized: %s", err)
@@ -81,8 +82,14 @@ func TestLedgerQueries(t *testing.T) {
 	//defer client.Close()
 
 	chaincodeID := integration.GenerateExampleID(false)
-	err := integration.PrepareExampleCC(sdk, fabsdk.WithUser("Admin"), testSetup.OrgID, chaincodeID)
-	require.Nil(t, err, "InstallAndInstantiateExampleCC return error")
+
+	if metadata.CCMode == "lscc" {
+		err := integration.PrepareExampleCC(sdk, fabsdk.WithUser("Admin"), testSetup.OrgID, chaincodeID)
+		require.Nil(t, err, "InstallAndInstantiateExampleCC return error")
+	} else {
+		err := integration.PrepareExampleCCLc(sdk, fabsdk.WithUser("Admin"), testSetup.OrgID, chaincodeID)
+		require.Nil(t, err, "InstallAndInstantiateExampleCC return error")
+	}
 
 	//prepare required contexts
 	channelClientCtx := sdk.ChannelContext(channelID, fabsdk.WithUser("Admin"), fabsdk.WithOrg(orgName))
@@ -138,7 +145,9 @@ func TestLedgerQueries(t *testing.T) {
 
 	require.Nil(t, err, "resmgmt new return error")
 
-	testInstantiatedChaincodes(t, chaincodeID, channelID, resmgmtClient, targets)
+	if metadata.CCMode == "lscc" {
+		testInstantiatedChaincodes(t, chaincodeID, channelID, resmgmtClient, targets)
+	}
 
 	testQueryConfigBlock(t, ledgerClient, targets)
 }

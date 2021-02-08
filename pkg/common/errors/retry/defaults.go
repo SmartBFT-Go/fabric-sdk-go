@@ -9,9 +9,9 @@ package retry
 import (
 	"time"
 
+	"github.com/hyperledger/fabric-protos-go/common"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric-sdk-go/pkg/common/errors/status"
-	"github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/common"
-	pb "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/peer"
 	grpcCodes "google.golang.org/grpc/codes"
 )
 
@@ -70,8 +70,6 @@ var DefaultResMgmtOpts = Opts{
 var DefaultRetryableCodes = map[status.Group][]status.Code{
 	status.EndorserClientStatus: {
 		status.EndorsementMismatch,
-		status.PrematureChaincodeExecution,
-		status.ChaincodeAlreadyLaunching,
 		status.ChaincodeNameNotFound,
 	},
 	status.EndorserServerStatus: {
@@ -99,9 +97,8 @@ var DefaultRetryableCodes = map[status.Group][]status.Code{
 // transient by fabric-sdk-go/pkg/client/resmgmt.Client
 var ResMgmtDefaultRetryableCodes = map[status.Group][]status.Code{
 	status.EndorserClientStatus: {
+		status.ConnectionFailed,
 		status.EndorsementMismatch,
-		status.PrematureChaincodeExecution,
-		status.ChaincodeAlreadyLaunching,
 		status.ChaincodeNameNotFound,
 	},
 	status.EndorserServerStatus: {
@@ -132,14 +129,13 @@ var ResMgmtDefaultRetryableCodes = map[status.Group][]status.Code{
 var ChannelClientRetryableCodes = map[status.Group][]status.Code{
 	status.EndorserClientStatus: {
 		status.ConnectionFailed, status.EndorsementMismatch,
-		status.PrematureChaincodeExecution,
 		status.Code(pb.TxValidationCode_MVCC_READ_CONFLICT),
-		status.ChaincodeAlreadyLaunching,
 		status.ChaincodeNameNotFound,
 	},
 	status.EndorserServerStatus: {
 		status.Code(common.Status_SERVICE_UNAVAILABLE),
 		status.Code(common.Status_INTERNAL_SERVER_ERROR),
+		status.PvtDataDisseminationFailed,
 	},
 	status.OrdererClientStatus: {
 		status.ConnectionFailed,
@@ -177,8 +173,6 @@ var TestRetryableCodes = map[status.Group][]status.Code{
 	},
 	status.EndorserClientStatus: {
 		status.ConnectionFailed, status.EndorsementMismatch,
-		status.PrematureChaincodeExecution,
-		status.ChaincodeAlreadyLaunching,
 		status.ChaincodeNameNotFound,
 		status.Code(pb.TxValidationCode_MVCC_READ_CONFLICT),
 	},

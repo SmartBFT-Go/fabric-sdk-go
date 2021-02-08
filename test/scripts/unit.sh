@@ -51,7 +51,11 @@ findPackages
 
 # Reduce unit tests to changed packages.
 if [ "${TEST_CHANGED_ONLY}" = true ]; then
+    # Find changed files across the project as these may be dependencies of the module.
+    PWD_ORIG_FIND=$(pwd)
+    cd "${PROJECT_DIR}"
     findChangedFiles
+    cd "${PWD_ORIG_FIND}"
 
     declare matcher='( |^)(test/fixtures/|test/metadata/|test/scripts/|Makefile( |$)|go.mod( |$)|golangci.yml( |$)|ci.properties( |$))'
     if [[ "${CHANGED_FILES[@]}" =~ ${matcher} ]]; then
@@ -101,7 +105,7 @@ GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.ProjectPath=${PROJE
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.ChannelConfigPath=test/fixtures/fabric/${FABRIC_SDKGO_CODELEVEL_VER}/channel"
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.CryptoConfigPath=test/fixtures/fabric/${FABRIC_CRYPTOCONFIG_VERSION}/crypto-config"
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.TestRunID=${FABRIC_SDKGO_TESTRUN_ID}"
-${GO_CMD} test ${RACEFLAG} -cover -tags "testing ${GO_TAGS}" ${GO_TESTFLAGS} -ldflags="${GO_LDFLAGS}" ${PKGS[@]} -p 1 -timeout=40m
+${GO_CMD} test ${RACEFLAG} -coverprofile=coverage.txt -covermode=atomic -tags "testing ${GO_TAGS}" ${GO_TESTFLAGS} -ldflags="${GO_LDFLAGS}" ${PKGS[@]} -p 1 -timeout=40m
 
 echo "Unit tests finished successfully"
 cd ${PWD_ORIG}

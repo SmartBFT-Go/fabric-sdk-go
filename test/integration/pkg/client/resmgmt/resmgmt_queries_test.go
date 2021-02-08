@@ -12,6 +12,7 @@ import (
 	"github.com/hyperledger/fabric-sdk-go/pkg/client/resmgmt"
 	"github.com/hyperledger/fabric-sdk-go/pkg/common/errors/retry"
 	"github.com/hyperledger/fabric-sdk-go/pkg/fabsdk"
+	"github.com/hyperledger/fabric-sdk-go/test/metadata"
 )
 
 func TestResMgmtClientQueries(t *testing.T) {
@@ -41,40 +42,74 @@ func TestResMgmtClientQueries(t *testing.T) {
 
 	testQueryChannels(t, testSetup.ChannelID, target, client)
 
+	// TODO java and node integration tests need to be fixed.
+	/*
+		// test java chaincode installed and instantiated
+		javaCCID := integration.GenerateExampleJavaID(false)
+
+		testInstalledChaincodes(t, javaCCID, target, client)
+
+		testInstantiatedChaincodes(t, orgChannelID, javaCCID, target, client)
+
+		// test node chaincode installed and instantiated
+		nodeCCID := integration.GenerateExampleNodeID(false)
+
+		testInstalledChaincodes(t, nodeCCID, target, client)
+
+		testInstantiatedChaincodes(t, orgChannelID, nodeCCID, target, client)
+
+	*/
 }
 
 func testInstantiatedChaincodes(t *testing.T, channelID string, ccID string, target string, client *resmgmt.Client) {
-
-	chaincodeQueryResponse, err := client.QueryInstantiatedChaincodes(channelID, resmgmt.WithTargetEndpoints(target), resmgmt.WithRetry(retry.DefaultResMgmtOpts))
-	if err != nil {
-		t.Fatalf("QueryInstantiatedChaincodes return error: %s", err)
-	}
-
-	found := false
-	for _, chaincode := range chaincodeQueryResponse.Chaincodes {
-		t.Logf("**InstantiatedCC: %s", chaincode)
-		if chaincode.Name == ccID {
-			found = true
+	if metadata.CCMode == "lscc" {
+		chaincodeQueryResponse, err := client.QueryInstantiatedChaincodes(channelID, resmgmt.WithTargetEndpoints(target), resmgmt.WithRetry(retry.DefaultResMgmtOpts))
+		if err != nil {
+			t.Fatalf("QueryInstantiatedChaincodes return error: %s", err)
 		}
-	}
 
-	if !found {
-		t.Fatalf("QueryInstantiatedChaincodes failed to find instantiated %s chaincode", ccID)
+		found := false
+		for _, chaincode := range chaincodeQueryResponse.Chaincodes {
+			t.Logf("**InstantiatedCC: %s", chaincode)
+			if chaincode.Name == ccID {
+				found = true
+			}
+		}
+
+		if !found {
+			t.Fatalf("QueryInstantiatedChaincodes failed to find instantiated %s chaincode", ccID)
+		}
 	}
 }
 
 func testInstalledChaincodes(t *testing.T, ccID string, target string, client *resmgmt.Client) {
-
-	chaincodeQueryResponse, err := client.QueryInstalledChaincodes(resmgmt.WithTargetEndpoints(target), resmgmt.WithRetry(retry.DefaultResMgmtOpts))
-	if err != nil {
-		t.Fatalf("QueryInstalledChaincodes return error: %s", err)
-	}
-
 	found := false
-	for _, chaincode := range chaincodeQueryResponse.Chaincodes {
-		t.Logf("**InstalledCC: %s", chaincode)
-		if chaincode.Name == ccID {
-			found = true
+	if metadata.CCMode == "lscc" {
+		chaincodeQueryResponse, err := client.QueryInstalledChaincodes(resmgmt.WithTargetEndpoints(target), resmgmt.WithRetry(retry.DefaultResMgmtOpts))
+		if err != nil {
+			t.Fatalf("QueryInstalledChaincodes return error: %s", err)
+		}
+
+		for _, chaincode := range chaincodeQueryResponse.Chaincodes {
+			t.Logf("**InstalledCC: %s", chaincode)
+			if chaincode.Name == ccID {
+				found = true
+			}
+		}
+	} else {
+		chaincodeQueryResponse, err := client.LifecycleQueryInstalledCC(resmgmt.WithTargetEndpoints(target), resmgmt.WithRetry(retry.DefaultResMgmtOpts))
+		if err != nil {
+			t.Fatalf("QueryInstalledChaincodes return error: %s", err)
+		}
+
+		for _, re := range chaincodeQueryResponse {
+			for _, cc := range re.References {
+				for _, c := range cc {
+					if c.Name == ccID {
+						found = true
+					}
+				}
+			}
 		}
 	}
 
@@ -113,10 +148,22 @@ func testQueryConfigFromOrderer(t *testing.T, channelID string, client *resmgmt.
 	if !contains(channelCfg.Orderers(), expected) {
 		t.Fatalf("Expected orderer %s, got %s", expected, channelCfg.Orderers())
 	}
+	block, err := client.QueryConfigBlockFromOrderer(channelID, resmgmt.WithOrdererEndpoint("orderer.example.com"))
+	if err != nil {
+		t.Fatalf("QueryConfigBlockFromOrderer return error: %s", err)
+	}
+	if block.Header.Number != channelCfg.BlockNumber() {
+		t.Fatalf("QueryConfigBlockFromOrderer returned invalid block number: [%d, %d]", block.Header.Number, channelCfg.BlockNumber())
+	}
 
 	_, err = client.QueryConfigFromOrderer(channelID, resmgmt.WithOrdererEndpoint("non-existent"), resmgmt.WithRetry(retry.DefaultResMgmtOpts))
 	if err == nil {
 		t.Fatal("QueryConfig should have failed for invalid orderer")
+	}
+
+	_, err = client.QueryConfigBlockFromOrderer(channelID, resmgmt.WithOrdererEndpoint("non-existent"), resmgmt.WithRetry(retry.DefaultResMgmtOpts))
+	if err == nil {
+		t.Fatal("QueryConfigBlockFromOrderer should have failed for invalid orderer")
 	}
 
 }

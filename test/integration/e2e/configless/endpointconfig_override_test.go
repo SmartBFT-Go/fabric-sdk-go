@@ -59,6 +59,7 @@ type clientConfig struct {
 
 // caConfig defines a CA configuration in identity config
 type caConfig struct {
+	ID         string
 	URL        string
 	TLSCACerts endpoint.MutualTLSConfig
 	Registrar  msp.EnrollCredentials
@@ -229,6 +230,7 @@ var (
 
 	caConfigObj = map[string]caConfig{
 		"ca.org1.example.com": {
+			ID:  "ca.org1.example.com",
 			URL: "https://ca.org1.example.com:7054",
 			TLSCACerts: endpoint.MutualTLSConfig{
 				Path: pathvar.Subst("${FABRIC_SDK_GO_PROJECT_PATH}/${CRYPTOCONFIG_FIXTURES_PATH}/peerOrganizations/org1.example.com/tlsca/tlsca.org1.example.com-cert.pem"),
@@ -244,6 +246,7 @@ var (
 			CAName: "ca.org1.example.com",
 		},
 		"ca.org2.example.com": {
+			ID:  "ca.org2.example.com",
 			URL: "https://ca.org2.example.com:8054",
 			TLSCACerts: endpoint.MutualTLSConfig{
 				Path: pathvar.Subst("${FABRIC_SDK_GO_PROJECT_PATH}/${CRYPTOCONFIG_FIXTURES_PATH}/peerOrganizations/org2.example.com/tlsca/tlsca.org2.example.com-cert.pem"),
@@ -435,7 +438,7 @@ func (m *exampleOrderersConfig) OrderersConfig() []fab.OrdererConfig {
 type exampleOrdererConfig struct{}
 
 //OrdererConfig overrides EndpointConfig's OrdererConfig function which returns the ordererConfig instance for the name/URL arg
-func (m *exampleOrdererConfig) OrdererConfig(ordererNameOrURL string) (*fab.OrdererConfig, bool) {
+func (m *exampleOrdererConfig) OrdererConfig(ordererNameOrURL string) (*fab.OrdererConfig, bool, bool) {
 	orderer, ok := networkConfig.Orderers[strings.ToLower(ordererNameOrURL)]
 	if !ok {
 		// EntityMatchers are not used in this implementation, below is an example of how to use them if needed, see default implementation for live example
@@ -444,10 +447,10 @@ func (m *exampleOrdererConfig) OrdererConfig(ordererNameOrURL string) (*fab.Orde
 		//	return nil, errors.WithStack(status.New(status.ClientStatus, status.NoMatchingOrdererEntity.ToInt32(), "no matching orderer config found", nil))
 		//}
 		//orderer = *matchingOrdererConfig
-		return nil, false
+		return nil, false, false
 	}
 
-	return &orderer, true
+	return &orderer, true, false
 }
 
 type examplePeersConfig struct {
@@ -675,7 +678,7 @@ func (m *exampleChannelOrderers) ChannelOrderers(channelName string) []fab.Order
 	channel := chCfg.ChannelConfig(channelName)
 
 	for _, chOrderer := range channel.Orderers {
-		orderer, ok := oCfg.OrdererConfig(chOrderer)
+		orderer, ok, _ := oCfg.OrdererConfig(chOrderer)
 		if !ok || orderer == nil {
 			return nil
 		}
@@ -686,7 +689,7 @@ func (m *exampleChannelOrderers) ChannelOrderers(channelName string) []fab.Order
 }
 
 type exampleTLSCACertPool struct {
-	tlsCertPool fab.CertPool
+	tlsCertPool commtls.CertPool
 }
 
 //newTLSCACertPool will create a new exampleTLSCACertPool instance with useSystemCertPool bool flag
@@ -701,7 +704,7 @@ func newTLSCACertPool(useSystemCertPool bool) *exampleTLSCACertPool {
 }
 
 // TLSCACertPool overrides EndpointConfig's TLSCACertPool function which will add the list of cert args to the cert pool and return it
-func (m *exampleTLSCACertPool) TLSCACertPool() fab.CertPool {
+func (m *exampleTLSCACertPool) TLSCACertPool() commtls.CertPool {
 	return m.tlsCertPool
 }
 

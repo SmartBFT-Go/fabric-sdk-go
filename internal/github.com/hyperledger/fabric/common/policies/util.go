@@ -11,8 +11,8 @@ Please review third_party pinning scripts and patches for more details.
 package policies
 
 import (
+	cb "github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric-sdk-go/internal/github.com/hyperledger/fabric/protoutil"
-	cb "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/common"
 )
 
 // ConfigPolicy defines a common representation for different *cb.ConfigPolicy values.
@@ -74,7 +74,7 @@ func ImplicitMetaMajorityPolicy(policyName string) *StandardConfigPolicy {
 	}
 }
 
-// ImplicitMetaMajorityPolicy defines a policy with key policyName and the given signature policy.
+// SignaturePolicy defines a policy with key policyName and the given signature policy.
 func SignaturePolicy(policyName string, sigPolicy *cb.SignaturePolicyEnvelope) *StandardConfigPolicy {
 	return &StandardConfigPolicy{
 		key: policyName,

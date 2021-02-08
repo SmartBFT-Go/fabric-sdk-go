@@ -26,9 +26,9 @@ import (
 	"github.com/hyperledger/fabric-sdk-go/pkg/util/pathvar"
 	"github.com/stretchr/testify/require"
 
-	"github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/common/cauthdsl"
+	"github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/common/policydsl"
 	"github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/core/common/ccprovider"
-	pb "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/peer"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 )
 
 const (
@@ -205,7 +205,7 @@ func getConfigBlockPayload() []byte {
 }
 
 func getCCDataPayload() []byte {
-	ccPolicy := cauthdsl.SignedByMspMember("Org1MSP")
+	ccPolicy := policydsl.SignedByMspMember("Org1MSP")
 	pp, err := proto.Marshal(ccPolicy)
 	if err != nil {
 		panic(fmt.Sprintf("failed to build mock CC Policy: %s", err))

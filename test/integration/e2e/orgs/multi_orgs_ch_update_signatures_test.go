@@ -18,6 +18,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-config/protolator"
+	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-sdk-go/internal/github.com/hyperledger/fabric/sdkpatch/keyutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hyperledger/fabric-sdk-go/internal/github.com/hyperledger/fabric/bccsp/utils"
 	"github.com/hyperledger/fabric-sdk-go/pkg/client/channel"
@@ -33,13 +41,13 @@ import (
 	"github.com/hyperledger/fabric-sdk-go/pkg/core/config/lookup"
 	"github.com/hyperledger/fabric-sdk-go/pkg/core/mocks"
 	fabImpl "github.com/hyperledger/fabric-sdk-go/pkg/fab"
+	"github.com/hyperledger/fabric-sdk-go/pkg/fab/resource"
 	"github.com/hyperledger/fabric-sdk-go/pkg/fabsdk"
 	"github.com/hyperledger/fabric-sdk-go/pkg/fabsdk/factory/defsvc"
 	"github.com/hyperledger/fabric-sdk-go/pkg/fabsdk/provider/chpvdr"
+	"github.com/hyperledger/fabric-sdk-go/pkg/util/test"
 	"github.com/hyperledger/fabric-sdk-go/test/integration"
-	"github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/common"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/hyperledger/fabric-sdk-go/test/metadata"
 )
 
 const (
@@ -67,7 +75,7 @@ type chCfgSignatures struct {
 // DistributedSignaturesTests will create at least 2 clients, each from 2 different orgs and creates two channel where these 2 orgs are members
 // one channel created by using the conventional SDK signatures (exported into a file and loaded to simulate external signature loading)
 // the second one is created by using OpenSSL to sign the channel Config data.
-func DistributedSignaturesTests(t *testing.T, examplecc string) {
+func DistributedSignaturesTests(t *testing.T, exampleCC string) {
 	ordererClCtx := createDSClientCtx(t, ordererOrgName)
 	defer ordererClCtx.sdk.Close()
 
@@ -76,15 +84,192 @@ func DistributedSignaturesTests(t *testing.T, examplecc string) {
 
 	org2ClCtx := createDSClientCtx(t, org2)
 	defer org2ClCtx.sdk.Close()
-
+	ccID1 := integration.GenerateExampleID(true)
 	// use SDK signing
-	e2eCreateAndQueryChannel(t, ordererClCtx, org1ClCtx, org2ClCtx, dsChannelSDK, exampleCC)
+	e2eCreateAndQueryChannel(t, ordererClCtx, org1ClCtx, org2ClCtx, dsChannelSDK, ccID1)
 
 	if isOpensslAvailable(t) {
+		ccID2 := integration.GenerateExampleID(true)
 		// use OpenSSL signing
-		e2eCreateAndQueryChannel(t, ordererClCtx, org1ClCtx, org2ClCtx, dsChannelExternal, exampleCC)
+		e2eCreateAndQueryChannel(t, ordererClCtx, org1ClCtx, org2ClCtx, dsChannelExternal, ccID2)
 	}
 
+	// modify channel config, must be endorsed by two orgs
+	e2eModifyChannel(t, ordererClCtx, org1ClCtx, org2ClCtx, dsChannelSDK)
+}
+
+var resourceCounter = 0
+
+func e2eModifyChannel(t *testing.T, ordererClCtx *dsClientCtx, org1ClCtx *dsClientCtx, org2ClCtx *dsClientCtx, channelID string) {
+
+	// retrieve channel config
+	channelConfig, err := getCurrentChannelConfig(t, ordererClCtx, channelID)
+	if err != nil {
+		t.Fatalf("getCurrentChannelConfig returned error: %s", err)
+	}
+
+	// channel config is modified by adding a new application policy.
+	// This change must be signed by the majority of org admins.
+	// The modified config becomes the proposed channel config.
+	resourceCounter = resourceCounter + 1
+	newACLPolicyName := fmt.Sprintf("my/new/resource/%d", resourceCounter)
+	newACLPolicy := "/Channel/Application/Admins"
+	err = test.AddACL(channelConfig, newACLPolicyName, newACLPolicy)
+	if err != nil {
+		t.Fatalf("error modifying channel configuration: %s", err)
+	}
+
+	// proposed config is distributed to other orgs as JSON string for signing
+	var buf bytes.Buffer
+	if err := protolator.DeepMarshalJSON(&buf, channelConfig); err != nil {
+		t.Fatalf("DeepMarshalJSON returned error: %s", err)
+	}
+	proposedChannelConfigJSON := buf.String()
+	//t.Log("------ proposed config ------\n")
+	//t.Log(proposedChannelConfigJSON)
+
+	// orderer calculates and signs config update tx
+	signedConfigOrderer, err := signConfigUpdate(t, ordererClCtx, channelID, proposedChannelConfigJSON)
+	if err != nil {
+		t.Fatalf("error getting signed configuration: %s", err)
+	}
+
+	// org1 calculates and signs config update tx
+	signedConfigOrg1, err := signConfigUpdate(t, org1ClCtx, channelID, proposedChannelConfigJSON)
+	if err != nil {
+		t.Fatalf("error getting signed configuration: %s", err)
+	}
+
+	// org2 calculates and signs config update tx
+	signedConfigOrg2, err := signConfigUpdate(t, org2ClCtx, channelID, proposedChannelConfigJSON)
+	if err != nil {
+		t.Fatalf("error getting signed configuration: %s", err)
+	}
+
+	// build config update envelope for constructing channel update request
+	configUpdate, err := getConfigUpdate(t, org1ClCtx, channelID, proposedChannelConfigJSON)
+	if err != nil {
+		t.Fatalf("getConfigUpdate returned error: %s", err)
+	}
+	configUpdate.ChannelId = channelID
+	configEnvelopeBytes, err := getConfigEnvelopeBytes(t, configUpdate)
+	if err != nil {
+		t.Fatalf("error marshaling channel configuration: %s", err)
+	}
+
+	// Verify that orderer org cannot sign the change
+	configReader := bytes.NewReader(configEnvelopeBytes)
+	req := resmgmt.SaveChannelRequest{ChannelID: channelID, ChannelConfig: configReader}
+	txID, err := ordererClCtx.rsCl.SaveChannel(req, resmgmt.WithConfigSignatures(signedConfigOrderer), resmgmt.WithOrdererEndpoint("orderer.example.com"))
+	require.Errorf(t, err, "SaveChannel should fail when signed by orderer org")
+
+	// Vefiry that org1 alone cannot sign the change
+	configReader = bytes.NewReader(configEnvelopeBytes)
+	req = resmgmt.SaveChannelRequest{ChannelID: channelID, ChannelConfig: configReader}
+	txID, err = org1ClCtx.rsCl.SaveChannel(req, resmgmt.WithConfigSignatures(signedConfigOrg1), resmgmt.WithOrdererEndpoint("orderer.example.com"))
+	require.Errorf(t, err, "SaveChannel should fail when signed by org1 only")
+
+	// Vefiry that org2 alone cannot sign the change
+	configReader = bytes.NewReader(configEnvelopeBytes)
+	req = resmgmt.SaveChannelRequest{ChannelID: channelID, ChannelConfig: configReader}
+	txID, err = org2ClCtx.rsCl.SaveChannel(req, resmgmt.WithConfigSignatures(signedConfigOrg2), resmgmt.WithOrdererEndpoint("orderer.example.com"))
+	require.Errorf(t, err, "SaveChannel should fail when signed by org2 only")
+
+	// Sign by both orgs and submit tx by the orderer org
+	configReader = bytes.NewReader(configEnvelopeBytes)
+	req = resmgmt.SaveChannelRequest{ChannelID: channelID, ChannelConfig: configReader}
+	txID, err = ordererClCtx.rsCl.SaveChannel(req, resmgmt.WithConfigSignatures(signedConfigOrg1, signedConfigOrg2), resmgmt.WithOrdererEndpoint("orderer.example.com"))
+	require.NoError(t, err, "error saving channel %s", channelID)
+	require.NotEmpty(t, txID, "transaction ID should be populated for SaveChannel %s", channelID)
+
+	time.Sleep(time.Second * 3)
+
+	// verify updated channel config
+	updatedChannelConfig, err := getCurrentChannelConfig(t, ordererClCtx, channelID)
+	if err != nil {
+		t.Fatalf("get updated channel config returned error: %s", err)
+	}
+	assert.Nilf(t, test.VerifyACL(updatedChannelConfig, newACLPolicyName, newACLPolicy), "VerifyACL failed")
+}
+
+func getConfigEnvelopeBytes(t *testing.T, configUpdate *common.ConfigUpdate) ([]byte, error) {
+
+	var buf bytes.Buffer
+	if err := protolator.DeepMarshalJSON(&buf, configUpdate); err != nil {
+		return nil, err
+	}
+
+	channelConfigBytes, err := proto.Marshal(configUpdate)
+	if err != nil {
+		return nil, err
+	}
+	configUpdateEnvelope := &common.ConfigUpdateEnvelope{
+		ConfigUpdate: channelConfigBytes,
+		Signatures:   nil,
+	}
+	configUpdateEnvelopeBytes, err := proto.Marshal(configUpdateEnvelope)
+	if err != nil {
+		return nil, err
+	}
+	payload := &common.Payload{
+		Data: configUpdateEnvelopeBytes,
+	}
+	payloadBytes, err := proto.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	configEnvelope := &common.Envelope{
+		Payload: payloadBytes,
+	}
+
+	return proto.Marshal(configEnvelope)
+}
+
+func getCurrentChannelConfig(t *testing.T, ctx *dsClientCtx, channelID string) (*common.Config, error) {
+	block, err := ctx.rsCl.QueryConfigBlockFromOrderer(channelID, resmgmt.WithOrdererEndpoint("orderer.example.com"))
+	if err != nil {
+		return nil, err
+	}
+	return resource.ExtractConfigFromBlock(block)
+}
+
+func getConfigUpdate(t *testing.T, ctx *dsClientCtx, channelID string, proposedConfigJSON string) (*common.ConfigUpdate, error) {
+
+	proposedConfig := &common.Config{}
+	err := protolator.DeepUnmarshalJSON(bytes.NewReader([]byte(proposedConfigJSON)), proposedConfig)
+	if err != nil {
+		return nil, err
+	}
+	channelConfig, err := getCurrentChannelConfig(t, ctx, channelID)
+	if err != nil {
+		return nil, err
+	}
+	configUpdate, err := resmgmt.CalculateConfigUpdate(channelID, channelConfig, proposedConfig)
+	if err != nil {
+		return nil, err
+	}
+	configUpdate.ChannelId = channelID
+
+	return configUpdate, nil
+}
+
+func signConfigUpdate(t *testing.T, ctx *dsClientCtx, channelID string, proposedConfigJSON string) (*common.ConfigSignature, error) {
+	configUpdate, err := getConfigUpdate(t, ctx, channelID, proposedConfigJSON)
+	if err != nil {
+		t.Fatalf("getConfigUpdate returned error: %s", err)
+	}
+	configUpdate.ChannelId = channelID
+
+	configUpdateBytes, err := proto.Marshal(configUpdate)
+	if err != nil {
+		t.Fatalf("ConfigUpdate marshal returned error: %s", err)
+	}
+
+	org1Client, err := ctx.clCtx()
+	if err != nil {
+		t.Fatalf("Client provider returned error: %s", err)
+	}
+	return resource.CreateConfigSignature(org1Client, configUpdateBytes)
 }
 
 func e2eCreateAndQueryChannel(t *testing.T, ordererClCtx, org1ClCtx, org2ClCtx *dsClientCtx, channelID, examplecc string) {
@@ -96,9 +281,9 @@ func e2eCreateAndQueryChannel(t *testing.T, ordererClCtx, org1ClCtx, org2ClCtx *
 	}()
 
 	t.Logf("created tempDir for %s signatures: %s", channelID, sigDir)
-	chConfigPath := integration.GetChannelConfigPath(fmt.Sprintf("%s.tx", channelID))
-	chConfigOrg1MSPPath := integration.GetChannelConfigPath(fmt.Sprintf("%s%sMSPanchors.tx", channelID, org1))
-	chConfigOrg2MSPPath := integration.GetChannelConfigPath(fmt.Sprintf("%s%sMSPanchors.tx", channelID, org2))
+	chConfigPath := integration.GetChannelConfigTxPath(fmt.Sprintf("%s.tx", channelID))
+	chConfigOrg1MSPPath := integration.GetChannelConfigTxPath(fmt.Sprintf("%s%sMSPanchors.tx", channelID, org1))
+	chConfigOrg2MSPPath := integration.GetChannelConfigTxPath(fmt.Sprintf("%s%sMSPanchors.tx", channelID, org2))
 	isSDKSigning := channelID == dsChannelSDK
 	sigs := generateSignatures(t, org1ClCtx, org2ClCtx, chConfigPath, chConfigOrg1MSPPath, chConfigOrg2MSPPath, sigDir, isSDKSigning)
 	saveChannel(t, ordererClCtx, org1ClCtx, org2ClCtx, channelID, chConfigPath, chConfigOrg1MSPPath, chConfigOrg2MSPPath, sigs, true)
@@ -118,19 +303,37 @@ func e2eCreateAndQueryChannel(t *testing.T, ordererClCtx, org1ClCtx, org2ClCtx *
 	require.NoError(t, err)
 
 	ccVersion := "1" // ccVersion= 1 because previous test increased the ccVersion # on the peers.
+	if metadata.CCMode == "lscc" {
+		// instantiate example_CC on dschannel
+		instantiateCC(t, org1ClCtx.rsCl, examplecc, ccVersion, channelID)
 
-	// instantiate example_CC on dschannel
-	instantiateCC(t, org1ClCtx.rsCl, exampleCC, ccVersion, channelID)
+		// Ensure the CC is instantiated on all peers in both orgs
+		found := queryInstantiatedCC(t, org1, org1ClCtx.rsCl, channelID, examplecc, ccVersion, org1Peers)
+		require.True(t, found, "Failed to find instantiated chaincode [%s:%s] in at least one peer in Org1 on channel [%s]", examplecc, ccVersion, channelID)
 
-	// Ensure the CC is instantiated on all peers in both orgs
-	found := queryInstantiatedCC(t, org1, org1ClCtx.rsCl, channelID, exampleCC, ccVersion, org1Peers)
-	require.True(t, found, "Failed to find instantiated chaincode [%s:%s] in at least one peer in Org1 on channel [%s]", exampleCC, ccVersion, channelID)
-
-	found = queryInstantiatedCC(t, org2, org2ClCtx.rsCl, channelID, exampleCC, ccVersion, org2Peers)
-	require.True(t, found, "Failed to find instantiated chaincode [%s:%s] in at least one peer in Org2 on channel [%s]", exampleCC, ccVersion, channelID)
-
-	// test regular querying on dschannel from org1 and org2
-	testQueryingOrgs(t, org1ClCtx.sdk, org2ClCtx.sdk, channelID, examplecc)
+		found = queryInstantiatedCC(t, org2, org2ClCtx.rsCl, channelID, examplecc, ccVersion, org2Peers)
+		require.True(t, found, "Failed to find instantiated chaincode [%s:%s] in at least one peer in Org2 on channel [%s]", examplecc, ccVersion, channelID)
+		// test regular querying on dschannel from org1 and org2
+		testQueryingOrgs(t, org1ClCtx.sdk, org2ClCtx.sdk, channelID, examplecc)
+	} else {
+		// TODO: dsChannelExternal needs to be complete
+		if channelID == dsChannelSDK {
+			mc := &multiorgContext{
+				// client contexts
+				ordererClientContext:   ordererClCtx.clCtx,
+				org1AdminClientContext: org1ClCtx.clCtx,
+				org2AdminClientContext: org2ClCtx.clCtx,
+				org1ResMgmt:            org1ClCtx.rsCl,
+				org2ResMgmt:            org2ClCtx.rsCl,
+				ccName:                 examplecc,
+				ccVersion:              ccVersion,
+				channelID:              channelID,
+			}
+			createCCLifecycle(t, mc, examplecc, ccVersion, 1, true, channelID, org1ClCtx.sdk)
+			// test regular querying on dschannel from org1 and org2
+			testQueryingOrgs(t, org1ClCtx.sdk, org2ClCtx.sdk, channelID, examplecc)
+		}
+	}
 }
 
 func generateSignatures(t *testing.T, org1ClCtx, org2ClCtx *dsClientCtx, chConfigPath, chConfigOrg1MSPPath, chConfigOrg2MSPPath, sigDir string, isSDKSigning bool) chCfgSignatures {
@@ -231,7 +434,14 @@ func createSignatureFromSDK(t *testing.T, dsCtx *dsClientCtx, chConfigPath strin
 	usr, err := mspClient.GetSigningIdentity(user)
 	require.NoError(t, err, "error creating a new SigningIdentity for %s", dsCtx.org)
 
-	signature, err := dsCtx.rsCl.CreateConfigSignature(usr, chConfigPath)
+	chConfigReader, err := os.Open(chConfigPath)
+	require.NoError(t, err, "failed to create reader for the config %s", chConfigPath)
+	defer func() {
+		err = chConfigReader.Close()
+		require.NoError(t, err, "failed to close chConfig file %s", chConfigPath)
+	}()
+
+	signature, err := dsCtx.rsCl.CreateConfigSignatureFromReader(usr, chConfigReader)
 	require.NoError(t, err, "error creating a new ConfigSignature for %s", org1)
 
 	return signature
@@ -407,7 +617,15 @@ func generateChConfigData(t *testing.T, dsCtx *dsClientCtx, chConfigPath, user, 
 	u, err := mspClient.GetSigningIdentity(user)
 	require.NoError(t, err, "error creating a new SigningIdentity for %s", dsCtx.org)
 
-	d, err := dsCtx.rsCl.CreateConfigSignatureData(u, chConfigPath)
+	chConfigReader, err := os.Open(chConfigPath)
+	assert.NoError(t, err, "Failed to create reader for the config %s", chConfigPath)
+
+	defer func() {
+		err = chConfigReader.Close()
+		require.NoError(t, err, "Failed to close chConfig file")
+	}()
+
+	d, err := dsCtx.rsCl.CreateConfigSignatureDataFromReader(u, chConfigReader)
 	require.NoError(t, err, "Failed to fetch Channel config data for signing")
 
 	chCfgName := getBaseChCfgFileName(chConfigPath)
@@ -564,7 +782,7 @@ func loadPrivateKey(t *testing.T, path string) interface{} {
 	raw, err := ioutil.ReadFile(path)
 	require.NoError(t, err, "Failed to read PK @ '%s'", path)
 
-	key, err := utils.PEMtoPrivateKey(raw, []byte(""))
+	key, err := keyutil.PEMToPrivateKey(raw, []byte(""))
 	require.NoError(t, err, "Failed to convert PEM data to PK")
 
 	return key

@@ -13,10 +13,10 @@ import (
 	"sync"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-protos-go/ledger/rwset/kvrwset"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric-sdk-go/internal/github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
 	"github.com/hyperledger/fabric-sdk-go/pkg/common/providers/fab"
-	"github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/ledger/rwset/kvrwset"
-	pb "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/peer"
 )
 
 // MockPeer is a mock fabricsdk.Peer.
@@ -35,6 +35,7 @@ type MockPeer struct {
 	Endorser             []byte
 	ChaincodeID          string
 	RwSets               []*rwsetutil.NsRwSet
+	properties           fab.Properties
 }
 
 // NewMockPeer creates basic mock peer
@@ -63,14 +64,14 @@ func (p *MockPeer) SetMSPID(mspID string) {
 	p.MockMSP = mspID
 }
 
-// Roles returns the mock peer's mock roles
-func (p *MockPeer) Roles() []string {
-	return p.MockRoles
+// Properties returns the peer's properties
+func (p *MockPeer) Properties() fab.Properties {
+	return p.properties
 }
 
-// SetRoles sets the mock peer's mock roles
-func (p *MockPeer) SetRoles(roles []string) {
-	p.MockRoles = roles
+// SetProperties sets the peer's properties
+func (p *MockPeer) SetProperties(properties fab.Properties) {
+	p.properties = properties
 }
 
 // EnrollmentCertificate returns the mock peer's mock enrollment certificate

@@ -11,13 +11,13 @@ Please review third_party pinning scripts and patches for more details.
 package protoutil
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/asn1"
-	"fmt"
-	"math"
+	"math/big"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric-sdk-go/internal/github.com/hyperledger/fabric/common/util"
-	cb "github.com/hyperledger/fabric-sdk-go/third_party/github.com/hyperledger/fabric/protos/common"
+	cb "github.com/hyperledger/fabric-protos-go/common"
 	"github.com/pkg/errors"
 )
 
@@ -27,6 +27,7 @@ func NewBlock(seqNum uint64, previousHash []byte) *cb.Block {
 	block.Header = &cb.BlockHeader{}
 	block.Header.Number = seqNum
 	block.Header.PreviousHash = previousHash
+	block.Header.DataHash = []byte{}
 	block.Data = &cb.BlockData{}
 
 	var metadataContents [][]byte
@@ -39,66 +40,65 @@ func NewBlock(seqNum uint64, previousHash []byte) *cb.Block {
 }
 
 type asn1Header struct {
-	Number       int64
+	Number       *big.Int
 	PreviousHash []byte
 	DataHash     []byte
 }
 
 func BlockHeaderBytes(b *cb.BlockHeader) []byte {
-	if b.Number > uint64(math.MaxInt64) {
-		panic(fmt.Errorf("Golang does not currently support encoding uint64 to asn1"))
-	}
 	asn1Header := asn1Header{
 		PreviousHash: b.PreviousHash,
 		DataHash:     b.DataHash,
-		Number:       int64(b.Number),
+		Number:       new(big.Int).SetUint64(b.Number),
 	}
 	result, err := asn1.Marshal(asn1Header)
 	if err != nil {
 		// Errors should only arise for types which cannot be encoded, since the
 		// BlockHeader type is known a-priori to contain only encodable types, an
-		// error here is fatal and should not be propogated
+		// error here is fatal and should not be propagated
 		panic(err)
 	}
 	return result
 }
 
 func BlockHeaderHash(b *cb.BlockHeader) []byte {
-	return util.ComputeSHA256(BlockHeaderBytes(b))
+	sum := sha256.Sum256(BlockHeaderBytes(b))
+	return sum[:]
 }
 
 func BlockDataHash(b *cb.BlockData) []byte {
-	return util.ComputeSHA256(util.ConcatenateBytes(b.Data...))
+	sum := sha256.Sum256(bytes.Join(b.Data, nil))
+	return sum[:]
 }
 
-// GetChainIDFromBlockBytes returns chain ID given byte array which represents
+// GetChannelIDFromBlockBytes returns channel ID given byte array which represents
 // the block
-func GetChainIDFromBlockBytes(bytes []byte) (string, error) {
-	block, err := GetBlockFromBlockBytes(bytes)
+func GetChannelIDFromBlockBytes(bytes []byte) (string, error) {
+	block, err := UnmarshalBlock(bytes)
 	if err != nil {
 		return "", err
 	}
 
-	return GetChainIDFromBlock(block)
+	return GetChannelIDFromBlock(block)
 }
 
-// GetChainIDFromBlock returns chain ID in the block
-func GetChainIDFromBlock(block *cb.Block) (string, error) {
+// GetChannelIDFromBlock returns channel ID in the block
+func GetChannelIDFromBlock(block *cb.Block) (string, error) {
 	if block == nil || block.Data == nil || block.Data.Data == nil || len(block.Data.Data) == 0 {
-		return "", errors.Errorf("failed to retrieve channel id - block is empty")
+		return "", errors.New("failed to retrieve channel id - block is empty")
 	}
 	var err error
 	envelope, err := GetEnvelopeFromBlock(block.Data.Data[0])
 	if err != nil {
 		return "", err
 	}
-	payload, err := GetPayload(envelope)
+	payload, err := UnmarshalPayload(envelope.Payload)
 	if err != nil {
 		return "", err
 	}
 
 	if payload.Header == nil {
-		return "", errors.Errorf("failed to retrieve channel id - payload header is empty")
+		return "", errors.New("failed to retrieve channel id - payload header is empty")
 	}
 	chdr, err := UnmarshalChannelHeader(payload.Header.ChannelHeader)
 	if err != nil {
@@ -110,10 +110,18 @@ func GetChainIDFromBlock(block *cb.Block) (string, error) {
 
 // GetMetadataFromBlock retrieves metadata at the specified index.
 func GetMetadataFromBlock(block *cb.Block, index cb.BlockMetadataIndex) (*cb.Metadata, error) {
+	if block.Metadata == nil {
+		return nil, errors.New("no metadata in block")
+	}
+
+	if len(block.Metadata.Metadata) <= int(index) {
+		return nil, errors.Errorf("no metadata at index [%s]", index)
+	}
+
 	md := &cb.Metadata{}
 	err := proto.Unmarshal(block.Metadata.Metadata[index], md)
 	if err != nil {
-		return nil, errors.Wrapf(err, "error unmarshaling metadata from block at index [%s]", index)
+		return nil, errors.Wrapf(err, "error unmarshaling metadata at index [%s]", index)
 	}
 	return md, nil
 }
@@ -128,19 +136,62 @@ func GetMetadataFromBlockOrPanic(block *cb.Block, index cb.BlockMetadataIndex) *
 	return md
 }
 
+// GetConsenterMetadataFromBlock attempts to retrieve consenter metadata from the value
+// stored in block metadata at index SIGNATURES (first field). If no consenter metadata
+// is found there, it falls back to index ORDERER (third field).
+func GetConsenterMetadataFromBlock(block *cb.Block) (*cb.Metadata, error) {
+	m, err := GetMetadataFromBlock(block, cb.BlockMetadataIndex_SIGNATURES)
+	if err != nil {
+		return nil, errors.WithMessage(err, "failed to retrieve metadata")
+	}
+
+	// TODO FAB-15864 Remove this fallback when we can stop supporting upgrade from pre-1.4.1 orderer
+	if len(m.Value) == 0 {
+		return GetMetadataFromBlock(block, cb.BlockMetadataIndex_ORDERER)
+	}
+
+	obm := &cb.OrdererBlockMetadata{}
+	err = proto.Unmarshal(m.Value, obm)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to unmarshal orderer block metadata")
+	}
+
+	res := &cb.Metadata{}
+	err = proto.Unmarshal(obm.ConsenterMetadata, res)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to unmarshal consenter metadata")
+	}
+
+	return res, nil
+}
+
 // GetLastConfigIndexFromBlock retrieves the index of the last config block as
 // encoded in the block metadata
 func GetLastConfigIndexFromBlock(block *cb.Block) (uint64, error) {
-	md, err := GetMetadataFromBlock(block, cb.BlockMetadataIndex_LAST_CONFIG)
+	m, err := GetMetadataFromBlock(block, cb.BlockMetadataIndex_SIGNATURES)
 	if err != nil {
-		return 0, err
+		return 0, errors.WithMessage(err, "failed to retrieve metadata")
 	}
-	lc := &cb.LastConfig{}
-	err = proto.Unmarshal(md.Value, lc)
+	// TODO FAB-15864 Remove this fallback when we can stop supporting upgrade from pre-1.4.1 orderer
+	if len(m.Value) == 0 {
+		m, err := GetMetadataFromBlock(block, cb.BlockMetadataIndex_LAST_CONFIG)
+		if err != nil {
+			return 0, errors.WithMessage(err, "failed to retrieve metadata")
+		}
+		lc := &cb.LastConfig{}
+		err = proto.Unmarshal(m.Value, lc)
+		if err != nil {
+			return 0, errors.Wrap(err, "error unmarshaling LastConfig")
+		}
+		return lc.Index, nil
+	}
+
+	obm := &cb.OrdererBlockMetadata{}
+	err = proto.Unmarshal(m.Value, obm)
 	if err != nil {
-		return 0, errors.Wrap(err, "error unmarshaling LastConfig")
+		return 0, errors.Wrap(err, "failed to unmarshal orderer block metadata")
 	}
-	return lc.Index, nil
+	return obm.LastConfig.Index, nil
 }
 
 // GetLastConfigIndexFromBlockOrPanic retrieves the index of the last config
@@ -151,16 +202,6 @@ func GetLastConfigIndexFromBlockOrPanic(block *cb.Block) uint64 {
 		panic(err)
 	}
 	return index
-}
-
-// GetBlockFromBlockBytes marshals the bytes into Block
-func GetBlockFromBlockBytes(blockBytes []byte) (*cb.Block, error) {
-	block := &cb.Block{}
-	err := proto.Unmarshal(blockBytes, block)
-	if err != nil {
-		return block, errors.Wrap(err, "error unmarshaling block")
-	}
-	return block, nil
 }
 
 // CopyBlockMetadata copies metadata from one block into another
@@ -174,9 +215,9 @@ func CopyBlockMetadata(src *cb.Block, dst *cb.Block) {
 // InitBlockMetadata initializes metadata structure
 func InitBlockMetadata(block *cb.Block) {
 	if block.Metadata == nil {
-		block.Metadata = &cb.BlockMetadata{Metadata: [][]byte{{}, {}, {}}}
-	} else if len(block.Metadata.Metadata) < int(cb.BlockMetadataIndex_TRANSACTIONS_FILTER+1) {
-		for i := int(len(block.Metadata.Metadata)); i <= int(cb.BlockMetadataIndex_TRANSACTIONS_FILTER); i++ {
+		block.Metadata = &cb.BlockMetadata{Metadata: [][]byte{{}, {}, {}, {}, {}}}
+	} else if len(block.Metadata.Metadata) < int(cb.BlockMetadataIndex_COMMIT_HASH+1) {
+		for i := int(len(block.Metadata.Metadata)); i <= int(cb.BlockMetadataIndex_COMMIT_HASH); i++ {
 			block.Metadata.Metadata = append(block.Metadata.Metadata, []byte{})
 		}
 	}

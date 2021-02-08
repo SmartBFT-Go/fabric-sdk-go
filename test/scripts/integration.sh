@@ -22,13 +22,14 @@ set -e
 GO_CMD="${GO_CMD:-go}"
 FABRIC_SDKGO_CODELEVEL_TAG="${FABRIC_SDKGO_CODELEVEL_TAG:-stable}"
 FABRIC_SDKGO_TESTRUN_ID="${FABRIC_SDKGO_TESTRUN_ID:-${RANDOM}}"
-FABRIC_CRYPTOCONFIG_VERSION="${FABRIC_CRYPTOCONFIG_VERSION:-v1}"
-FABRIC_FIXTURE_VERSION="${FABRIC_FIXTURE_VERSION:-v1.4}"
+FABRIC_CRYPTOCONFIG_VERSION="${FABRIC_CRYPTOCONFIG_VERSION:-unknown}"
+FABRIC_FIXTURE_VERSION="${FABRIC_FIXTURE_VERSION:-unknown}"
 CONFIG_FILE="${CONFIG_FILE:-config_test.yaml}"
 TEST_LOCAL="${TEST_LOCAL:-false}"
 TEST_CHANGED_ONLY="${TEST_CHANGED_ONLY:-false}"
 TEST_RACE_CONDITIONS="${TEST_RACE_CONDITIONS:-true}"
 SCRIPT_DIR="$(dirname "$0")"
+CC_MODE="${CC_MODE:-lifecycle}"
 # TODO: better default handling for FABRIC_CRYPTOCONFIG_VERSION
 
 GOMOD_PATH=$(cd ${SCRIPT_DIR} && ${GO_CMD} env GOMOD)
@@ -55,7 +56,6 @@ PKGS=($(${GO_CMD} list ${PROJECT_MODULE}/test/integration/... 2> /dev/null | \
       grep -v ^${PROJECT_MODULE}/test/integration/negative | \
       grep -v ^${PROJECT_MODULE}/test/integration\$ | \
       tr '\n' ' '))
-cd ${PWD_ORIG}
 
 if [ "$E2E_ONLY" == "true" ]; then
     echo "Including E2E tests only"
@@ -64,11 +64,11 @@ fi
 
 # Reduce tests to changed packages.
 if [ "${TEST_CHANGED_ONLY}" = true ]; then
-    # findChangedFiles assumes that the working directory contains the repo; so change to the repo directory.
-    PWD_ORIG=$(pwd)
+    # Find changed files across the project as these may be dependencies of the module.
+    PWD_ORIG_FIND=$(pwd)
     cd "${PROJECT_DIR}"
     findChangedFiles
-    cd ${PWD_ORIG}
+    cd "${PWD_ORIG_FIND}"
 
     if [[ "${CHANGED_FILES[@]}" =~ ( |^)(test/fixtures/|test/metadata/|test/scripts/|Makefile( |$)|go.mod( |$)|ci.properties( |$)) ]]; then
         echo "Test scripts, fixtures or metadata changed - running all tests"
@@ -106,9 +106,8 @@ GO_TAGS="${GO_TAGS} ${FABRIC_SDKGO_CODELEVEL_TAG}"
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.ProjectPath=${PROJECT_DIR}"
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.ChannelConfigPath=test/fixtures/fabric/${FABRIC_FIXTURE_VERSION}/channel"
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.CryptoConfigPath=test/fixtures/fabric/${FABRIC_CRYPTOCONFIG_VERSION}/crypto-config"
+GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/test/metadata.CCMode=${CC_MODE}"
 GO_LDFLAGS="${GO_LDFLAGS} -X ${PROJECT_MODULE}/fabric-sdk-go/test/metadata.TestRunID=${FABRIC_SDKGO_TESTRUN_ID}"
 
-PWD_ORIG=$(pwd)
-cd "${MODULE_PATH}"
-${GO_CMD} test ${RACEFLAG} -tags "${GO_TAGS}" ${GO_TESTFLAGS} -ldflags="${GO_LDFLAGS}" ${PKGS[@]} -p 1 -timeout=40m configFile=${CONFIG_FILE} testLocal=${TEST_LOCAL}
+${GO_CMD} test ${RACEFLAG} -tags "${GO_TAGS}" ${GO_TESTFLAGS} -ldflags="${GO_LDFLAGS}" ${PKGS[@]} -p 1 -timeout=120m configFile=${CONFIG_FILE} testLocal=${TEST_LOCAL}
 cd ${PWD_ORIG}
